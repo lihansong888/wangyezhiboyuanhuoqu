@@ -3,7 +3,12 @@ from bs4 import BeautifulSoup
 
 
 def search_tonkiang(keyword):
-    url = "https://tonkiang.us/?"
+    url = "https://tonkiang.us/"
+
+    params = {
+        "keyword": keyword,
+        "l": "0"
+    }
 
     headers = {
         "User-Agent": (
@@ -11,21 +16,18 @@ def search_tonkiang(keyword):
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/140.0.0.0 Safari/537.36"
         ),
-        "Referer": "https://tonkiang.us/",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Referer": "https://tonkiang.us/"
     }
 
-    data = {
-        "seerch": keyword
-    }
-
-    print(f"\n正在搜索：{keyword}")
-    print("请求方式：POST")
-    print("请求地址：", url)
+    print(f"正在搜索：{keyword}")
+    print(f"请求地址：{url}?keyword={keyword}&l=0")
 
     try:
-        response = requests.post(
+        response = requests.get(
             url,
-            data=data,
+            params=params,
             headers=headers,
             timeout=30
         )
@@ -35,62 +37,46 @@ def search_tonkiang(keyword):
 
         if response.status_code != 200:
             print("请求失败")
+            print(response.text[:500])
             return []
 
         soup = BeautifulSoup(response.text, "html.parser")
 
         results = []
 
-        # Tonkiang 搜索结果结构：
-        #
-        # <div class="resultplus">
-        #     <div class="channel1">
-        #         ...
-        #         <td class="nl">
-        #             http://xxxxx.m3u8
-        #         </td>
-        #     </div>
-        # </div>
+        # Tonkiang 的直播源位于：
+        # <tba class="vnliuj"> http://xxx.m3u8 </tba>
+        for item in soup.select("tba.vnliuj"):
+            stream_url = item.get_text(strip=True)
 
-        for item in soup.select("div.resultplus"):
+            if stream_url.startswith(("http://", "https://")):
+                results.append(stream_url)
 
-            channel = item.select_one("div.channel1")
+        # 再从网页源码中寻找 m3u8 / m3u / ts
+        import re
 
-            if not channel:
-                continue
+        urls = re.findall(
+            r'https?://[^\s"\'<>]+(?:m3u8|m3u|ts)(?:\?[^\s"\'<>]*)?',
+            response.text,
+            re.IGNORECASE
+        )
 
-            for td in item.select("td.nl"):
+        results.extend(urls)
 
-                text = td.get_text(strip=True)
-
-                if not text:
-                    continue
-
-                if text.startswith("http://") or text.startswith("https://"):
-                    results.append(text)
-
-        # 去重，同时保持原来的顺序
+        # 去重
         results = list(dict.fromkeys(results))
 
-        print(f"\n找到 {len(results)} 个直播源：\n")
+        print()
+        print(f"找到 {len(results)} 个直播源：")
+        print()
 
-        for index, stream_url in enumerate(results, 1):
-            print(f"{index}. {stream_url}")
+        for i, stream_url in enumerate(results, 1):
+            print(f"{i}. {stream_url}")
 
         return results
 
-    except requests.exceptions.Timeout:
-        print("\n请求超时")
-        return []
-
-    except requests.exceptions.RequestException as e:
-        print("\n网络请求错误：")
-        print(e)
-        return []
-
     except Exception as e:
-        print("\n程序发生错误：")
-        print(e)
+        print("发生错误：", e)
         return []
 
 
