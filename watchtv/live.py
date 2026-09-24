@@ -41,33 +41,35 @@ def search_tonkiang(keyword):
 
         results = []
 
-        # Tonkiang 搜索结果：
+        # Tonkiang 搜索结果结构：
+        #
         # <div class="resultplus">
         #     <div class="channel1">
         #         ...
-        #         <td class="nl">直播地址</td>
+        #         <td class="nl">
+        #             http://xxxxx.m3u8
+        #         </td>
         #     </div>
         # </div>
 
         for item in soup.select("div.resultplus"):
+
             channel = item.select_one("div.channel1")
+
             if not channel:
                 continue
 
-            # 找到直播地址
             for td in item.select("td.nl"):
+
                 text = td.get_text(strip=True)
 
                 if not text:
                     continue
 
-                if (
-                    text.startswith("http://")
-                    or text.startswith("https://")
-                ):
+                if text.startswith("http://") or text.startswith("https://"):
                     results.append(text)
 
-        # 去重
+        # 去重，同时保持原来的顺序
         results = list(dict.fromkeys(results))
 
         print(f"\n找到 {len(results)} 个直播源：\n")
@@ -77,8 +79,17 @@ def search_tonkiang(keyword):
 
         return results
 
+    except requests.exceptions.Timeout:
+        print("\n请求超时")
+        return []
+
+    except requests.exceptions.RequestException as e:
+        print("\n网络请求错误：")
+        print(e)
+        return []
+
     except Exception as e:
-        print("\n发生错误：")
+        print("\n程序发生错误：")
         print(e)
         return []
 
