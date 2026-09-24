@@ -1,6 +1,10 @@
 import requests
 import re
-from bs4 import BeautifulSoup
+import urllib3
+
+urllib3.disable_warnings(
+    urllib3.exceptions.InsecureRequestWarning
+)
 
 KEYWORD = "CCTV1"
 
@@ -9,6 +13,11 @@ HEADERS = {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/131.0.0.0 Safari/537.36"
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,"
+        "application/xml;q=0.9,image/avif,"
+        "image/webp,*/*;q=0.8"
     ),
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     "Referer": "https://www.foodieguide.com/",
@@ -40,6 +49,7 @@ def check_page(name, response):
         "chname",
         "channel1",
     ]:
+
         print(
             word + ":",
             "YES" if word in text else "NO"
@@ -48,106 +58,182 @@ def check_page(name, response):
     return response.text
 
 
+def request_get(session, params):
+
+    return session.get(
+        BASE,
+        params=params,
+        headers=HEADERS,
+        timeout=30,
+        verify=False,
+        allow_redirects=True
+    )
+
+
+def request_post(session, data):
+
+    return session.post(
+        BASE,
+        data=data,
+        headers=HEADERS,
+        timeout=30,
+        verify=False,
+        allow_redirects=True
+    )
+
+
 def main():
 
+    print("=" * 60)
+    print("FoodieGuide 搜索入口测试")
+    print("=" * 60)
+
+    print("关键词：", KEYWORD)
+
     session = requests.Session()
-    session.headers.update(HEADERS)
 
-    # -----------------------------------------------------
+    session.headers.update(
+        HEADERS
+    )
+
+    pages = []
+
+    # =====================================================
     # 方式 1
-    # -----------------------------------------------------
+    # =====================================================
 
-    r = session.get(
-        BASE,
-        params={
-            "iptv": KEYWORD
-        },
-        timeout=30
-    )
+    try:
 
-    html1 = check_page(
-        "方式 1：iptv=CCTV1",
-        r
-    )
+        r = request_get(
+            session,
+            {
+                "iptv": KEYWORD
+            }
+        )
 
-    # -----------------------------------------------------
+        html = check_page(
+            "方式 1：iptv=CCTV1",
+            r
+        )
+
+        pages.append(html)
+
+    except Exception as e:
+
+        print()
+        print("方式 1 失败：", e)
+
+
+    # =====================================================
     # 方式 2
-    # -----------------------------------------------------
+    # =====================================================
 
-    r = session.get(
-        BASE,
-        params={
-            "chname": KEYWORD
-        },
-        timeout=30
-    )
+    try:
 
-    html2 = check_page(
-        "方式 2：chname=CCTV1",
-        r
-    )
+        r = request_get(
+            session,
+            {
+                "chname": KEYWORD
+            }
+        )
 
-    # -----------------------------------------------------
+        html = check_page(
+            "方式 2：chname=CCTV1",
+            r
+        )
+
+        pages.append(html)
+
+    except Exception as e:
+
+        print()
+        print("方式 2 失败：", e)
+
+
+    # =====================================================
     # 方式 3
-    # -----------------------------------------------------
+    # =====================================================
 
-    r = session.get(
-        BASE,
-        params={
-            "page": "1",
-            "chname": KEYWORD,
-            "l": "0"
-        },
-        timeout=30
-    )
+    try:
 
-    html3 = check_page(
-        "方式 3：page=1&chname=CCTV1&l=0",
-        r
-    )
+        r = request_get(
+            session,
+            {
+                "page": "1",
+                "chname": KEYWORD,
+                "l": "0"
+            }
+        )
 
-    # -----------------------------------------------------
+        html = check_page(
+            "方式 3：page=1&chname=CCTV1&l=0",
+            r
+        )
+
+        pages.append(html)
+
+    except Exception as e:
+
+        print()
+        print("方式 3 失败：", e)
+
+
+    # =====================================================
     # 方式 4
-    # -----------------------------------------------------
+    # =====================================================
 
-    r = session.post(
-        BASE,
-        data={
-            "seerch": KEYWORD
-        },
-        timeout=30
-    )
+    try:
 
-    html4 = check_page(
-        "方式 4：POST seerch=CCTV1",
-        r
-    )
+        r = request_post(
+            session,
+            {
+                "seerch": KEYWORD
+            }
+        )
 
-    # -----------------------------------------------------
-    # 从所有页面寻找直播地址
-    # -----------------------------------------------------
+        html = check_page(
+            "方式 4：POST seerch=CCTV1",
+            r
+        )
+
+        pages.append(html)
+
+    except Exception as e:
+
+        print()
+        print("方式 4 失败：", e)
+
+
+    # =====================================================
+    # 合并页面
+    # =====================================================
 
     print()
     print("=" * 60)
     print("开始寻找直播地址")
     print("=" * 60)
 
-    all_html = (
-        html1 +
-        html2 +
-        html3 +
-        html4
+    all_html = "\n".join(
+        pages
     )
 
-    # 处理网页里的转义
+    # =====================================================
+    # 处理网页转义
+    # =====================================================
+
     all_html = (
         all_html
         .replace("\\/", "/")
         .replace("\\:", ":")
+        .replace("\\u002F", "/")
+        .replace("\\x2F", "/")
         .replace("&amp;", "&")
     )
 
-    # 找 http/https 地址
+    # =====================================================
+    # 提取 URL
+    # =====================================================
+
     urls = re.findall(
         r'https?://[^\s"\'<>]+',
         all_html,
@@ -162,24 +248,30 @@ def main():
             ".,;，。；）)]}>"
         )
 
-        low = url.lower()
+        lower = url.lower()
 
         if any(
-            x in low
+            x in lower
             for x in [
                 ".m3u8",
                 ".m3u",
                 ".ts",
+                ".flv",
                 "/rtp/",
                 "/live/",
                 "/stream/",
                 "/channel/",
+                "/playlist/"
             ]
         ):
 
             if url not in results:
-                results.append(url)
 
+                results.append(
+                    url
+                )
+
+    print()
     print(
         "发现候选直播源：",
         len(results)
@@ -189,9 +281,9 @@ def main():
         results,
         1
     ):
+
         print(
-            i,
-            url
+            f"{i}. {url}"
         )
 
     print()
@@ -201,4 +293,5 @@ def main():
 
 
 if __name__ == "__main__":
+
     main()
