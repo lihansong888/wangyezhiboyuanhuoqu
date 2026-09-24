@@ -4,7 +4,6 @@ import html
 import time
 import requests
 import urllib3
-from urllib.parse import quote
 
 urllib3.disable_warnings(
     urllib3.exceptions.InsecureRequestWarning
@@ -74,7 +73,7 @@ TXT_FILE = os.path.join(
 
 
 # =========================================================
-# URL 清理
+# 清理 URL
 # =========================================================
 
 def clean_url(url):
@@ -99,7 +98,7 @@ def clean_url(url):
 
 
 # =========================================================
-# 判断候选直播源
+# 判断是否可能是直播地址
 # =========================================================
 
 def is_candidate_url(url):
@@ -130,13 +129,13 @@ def is_candidate_url(url):
     ]
 
     return any(
-        x in lower
-        for x in keywords
+        item in lower
+        for item in keywords
     )
 
 
 # =========================================================
-# 提取网页中的所有候选地址
+# 从网页源码提取直播地址
 # =========================================================
 
 def extract_urls(text):
@@ -153,6 +152,7 @@ def extract_urls(text):
 
     results = []
 
+    # 普通 URL
     pattern = re.compile(
         r'https?://'
         r'(?:'
@@ -173,7 +173,7 @@ def extract_urls(text):
         if is_candidate_url(url):
             results.append(url)
 
-    # 再扫描引号中的 URL
+    # 引号里的 URL
     pattern2 = re.compile(
         r'["\'](https?://[^"\']+)["\']',
         re.IGNORECASE
@@ -190,7 +190,7 @@ def extract_urls(text):
 
 
 # =========================================================
-# URL 去重
+# 单个频道内部去重
 # =========================================================
 
 def unique_urls(urls):
@@ -217,6 +217,45 @@ def unique_urls(urls):
 
 
 # =========================================================
+# 全局直播源去重
+# =========================================================
+
+def deduplicate(channel_results):
+
+    seen = set()
+    result = []
+
+    for channel, urls in channel_results:
+
+        new_urls = []
+
+        for url in urls:
+
+            url = clean_url(url)
+
+            if not url:
+                continue
+
+            key = url.lower()
+
+            if key in seen:
+                continue
+
+            seen.add(key)
+
+            new_urls.append(url)
+
+        result.append(
+            (
+                channel,
+                new_urls
+            )
+        )
+
+    return result
+
+
+# =========================================================
 # FoodieGuide 搜索
 # =========================================================
 
@@ -233,7 +272,8 @@ def search_foodieguide(
     urls = []
 
     # -----------------------------------------------------
-    # 入口 1
+    # 方式 1
+    # ?chname=CCTV1
     # -----------------------------------------------------
 
     try:
@@ -275,7 +315,8 @@ def search_foodieguide(
         )
 
     # -----------------------------------------------------
-    # 入口 2
+    # 方式 2
+    # ?page=1&chname=CCTV1&l=0
     # -----------------------------------------------------
 
     try:
@@ -319,7 +360,8 @@ def search_foodieguide(
         )
 
     # -----------------------------------------------------
-    # 入口 3：seerch POST
+    # 方式 3
+    # POST seerch=CCTV1
     # -----------------------------------------------------
 
     try:
@@ -368,15 +410,20 @@ def search_foodieguide(
         len(urls)
     )
 
+    for index, url in enumerate(
+        urls,
+        1
+    ):
+
+        print(
+            f"{index}. {url}"
+        )
+
     return urls
 
 
 # =========================================================
-# 检测普通 HTTP/HLS 源
-#
-# 注意：
-# 这里只验证公网 HTTP/HTTPS 源。
-# RTP/UDP 组播不能靠 GitHub Actions 正常验证。
+# 检测直播源
 # =========================================================
 
 def check_stream(
@@ -386,7 +433,8 @@ def check_stream(
 
     lower = url.lower()
 
-    # RTP / UDP 类源不在 GitHub Actions 验证
+    # RTP / UDP / 组播
+    # GitHub Actions 无法可靠验证
     if (
         "/rtp/" in lower
         or lower.startswith("rtp://")
@@ -400,7 +448,7 @@ def check_stream(
             url,
             headers={
                 **HEADERS,
-                "Range": "bytes=0-4095",
+                "Range": "bytes=0-8191",
             },
             timeout=8,
             verify=False,
@@ -419,16 +467,16 @@ def check_stream(
             .lower()
         )
 
-        # HTTP 200 / 206 才认为有继续检测价值
         if status not in (
             200,
             206
         ):
+
             response.close()
             return False
 
         # -------------------------------------------------
-        # M3U8
+        # M3U8 检测
         # -------------------------------------------------
 
         if (
@@ -456,6 +504,7 @@ def check_stream(
                     or "#EXTINF" in text
                     or "#EXT-X-" in text
                 ):
+
                     return True
 
                 return False
@@ -466,7 +515,7 @@ def check_stream(
                 return False
 
         # -------------------------------------------------
-        # TS / FLV / 其他流
+        # 其他 HTTP 直播源
         # -------------------------------------------------
 
         response.close()
@@ -479,7 +528,7 @@ def check_stream(
 
 
 # =========================================================
-# 验证全部源
+# 检测所有直播源
 # =========================================================
 
 def validate_streams(
@@ -529,8 +578,6 @@ def validate_streams(
 
                 unknown += 1
 
-                # 组播/RT​​P 不删除，
-                # 因为 GitHub Actions 无法验证
                 valid_urls.append(
                     url
                 )
@@ -557,18 +604,22 @@ def validate_streams(
         )
 
     print()
+    print("=" * 60)
+    print("检测统计")
+    print("=" * 60)
+
     print(
         "检测候选源：",
         total
     )
 
     print(
-        "HTTP 可用：",
+        "HTTP/HLS 有效：",
         alive
     )
 
     print(
-        "无法在 GitHub Actions 验证：",
+        "无法验证的 RTP/组播：",
         unknown
     )
 
@@ -615,14 +666,23 @@ def save_m3u8(
                     + "\n"
                 )
 
+    print()
     print(
-        "M3U8 已生成：",
+        "M3U8 文件已生成：",
         M3U_FILE
     )
 
 
 # =========================================================
 # 生成 TXT
+#
+# 格式：
+#
+# 央视,#genre#
+# CCTV1,http://xxx
+# CCTV1,http://xxx
+# CCTV2,http://xxx
+#
 # =========================================================
 
 def save_txt(
@@ -649,7 +709,7 @@ def save_txt(
                 )
 
     print(
-        "TXT 已生成：",
+        "TXT 文件已生成：",
         TXT_FILE
     )
 
@@ -666,16 +726,16 @@ def main():
     print("=" * 60)
 
     print(
-        "频道数量：",
+        "搜索频道数量：",
         len(CHANNELS)
     )
 
     print(
-        "搜索入口：FoodieGuide"
+        "搜索引擎：FoodieGuide"
     )
 
     print(
-        "不限制最终源数量"
+        "不限制最终直播源数量"
     )
 
     print("=" * 60)
@@ -706,6 +766,7 @@ def main():
             )
         )
 
+        # 稍微降低请求频率
         time.sleep(0.5)
 
     # =====================================================
@@ -733,7 +794,7 @@ def main():
     )
 
     # =====================================================
-    # 第三阶段：有效性检测
+    # 第三阶段：检测
     # =====================================================
 
     channel_results = validate_streams(
@@ -762,12 +823,14 @@ def main():
 
     print()
     print(
-        "最终直播源：",
+        "全部直播源：",
         total
     )
 
+    print("=" * 60)
+
     # =====================================================
-    # 写文件
+    # 生成文件
     # =====================================================
 
     save_m3u8(
@@ -779,7 +842,7 @@ def main():
     )
 
     # =====================================================
-    # 文件检查
+    # 检查文件
     # =====================================================
 
     print()
@@ -788,12 +851,12 @@ def main():
     print("=" * 60)
 
     print(
-        "M3U8：",
+        "M3U8 路径：",
         M3U_FILE
     )
 
     print(
-        "TXT：",
+        "TXT 路径：",
         TXT_FILE
     )
 
@@ -807,11 +870,31 @@ def main():
         os.path.exists(TXT_FILE)
     )
 
+    if os.path.exists(M3U_FILE):
+
+        print(
+            "M3U8 大小：",
+            os.path.getsize(M3U_FILE),
+            "bytes"
+        )
+
+    if os.path.exists(TXT_FILE):
+
+        print(
+            "TXT 大小：",
+            os.path.getsize(TXT_FILE),
+            "bytes"
+        )
+
     print()
     print("=" * 60)
     print("搜索完成")
     print("=" * 60)
 
+
+# =========================================================
+# 启动
+# =========================================================
 
 if __name__ == "__main__":
     main()
