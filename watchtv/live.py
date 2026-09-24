@@ -1,6 +1,7 @@
 import requests
 import re
 import urllib3
+import json
 from urllib.parse import quote
 
 urllib3.disable_warnings(
@@ -11,7 +12,7 @@ urllib3.disable_warnings(
 # 配置
 # =========================================================
 
-KEYWORD = "CCTV1"
+CHANNEL_FILE = "watchtv/channels.json"
 
 BASE_URL = "https://www.foodieguide.com/iptvsearch/"
 
@@ -230,7 +231,7 @@ def search_foodieguide(keyword):
 
     # =====================================================
     # 如果第一页没有源
-    # 再尝试 page=1&chname=CCTV1&l=0
+    # 再尝试 page=1&chname=频道&l=0
     # =====================================================
 
     if not streams:
@@ -289,7 +290,7 @@ def search_foodieguide(keyword):
             )
 
     # =====================================================
-    # 去重
+    # 当前频道内部去重
     # =====================================================
 
     unique = []
@@ -340,7 +341,7 @@ def search_foodieguide(keyword):
 # 保存 M3U
 # =========================================================
 
-def save_m3u(streams):
+def save_m3u(all_results):
 
     filename = "live_results.m3u"
 
@@ -356,18 +357,20 @@ def save_m3u(streams):
                 "#EXTM3U\n"
             )
 
-            for index, stream in enumerate(
-                streams,
-                1
-            ):
+            for keyword, streams in all_results:
 
-                file.write(
-                    f"#EXTINF:-1,{KEYWORD} {index}\n"
-                )
+                for index, stream in enumerate(
+                    streams,
+                    1
+                ):
 
-                file.write(
-                    stream + "\n"
-                )
+                    file.write(
+                        f"#EXTINF:-1,{keyword} {index}\n"
+                    )
+
+                    file.write(
+                        stream + "\n"
+                    )
 
         print()
         print(
@@ -387,7 +390,7 @@ def save_m3u(streams):
 # 保存 TXT
 # =========================================================
 
-def save_txt(streams):
+def save_txt(all_results):
 
     filename = "live_results.txt"
 
@@ -399,11 +402,13 @@ def save_txt(streams):
             encoding="utf-8"
         ) as file:
 
-            for stream in streams:
+            for keyword, streams in all_results:
 
-                file.write(
-                    stream + "\n"
-                )
+                for stream in streams:
+
+                    file.write(
+                        f"{keyword},{stream}\n"
+                    )
 
         print(
             "TXT 文件已生成：",
@@ -424,28 +429,161 @@ def save_txt(streams):
 
 if __name__ == "__main__":
 
-    streams = search_foodieguide(
-        KEYWORD
+    print()
+    print("=" * 60)
+    print("直播源批量搜索")
+    print("=" * 60)
+
+    # =====================================================
+    # 读取频道列表
+    # =====================================================
+
+    try:
+
+        with open(
+            CHANNEL_FILE,
+            "r",
+            encoding="utf-8"
+        ) as file:
+
+            channels = json.load(file)
+
+    except Exception as e:
+
+        print()
+        print(
+            "读取频道列表失败：",
+            e
+        )
+
+        raise SystemExit(1)
+
+    if not isinstance(channels, list):
+
+        print()
+        print(
+            "频道列表格式错误：必须是 JSON 数组"
+        )
+
+        raise SystemExit(1)
+
+    print(
+        "频道数量：",
+        len(channels)
     )
 
-    if streams:
+    # =====================================================
+    # 批量搜索
+    # =====================================================
+
+    all_results = []
+
+    # 总地址去重
+    # 同一个地址如果被不同频道搜索到，
+    # 暂时保留第一次出现的频道归属。
+
+    global_seen = set()
+
+    for keyword in channels:
+
+        keyword = str(keyword).strip()
+
+        if not keyword:
+            continue
+
+        streams = search_foodieguide(
+            keyword
+        )
+
+        if not streams:
+
+            print()
+            print(
+                f"{keyword}：没有找到直播源"
+            )
+
+            continue
+
+        # -------------------------------------------------
+        # 按「频道 + 地址」整理
+        # -------------------------------------------------
+
+        channel_results = []
+
+        for stream in streams:
+
+            stream = stream.strip()
+
+            if not stream:
+                continue
+
+            # 相同频道 + 相同地址不重复
+            key = (
+                keyword,
+                stream
+            )
+
+            if key in global_seen:
+                continue
+
+            global_seen.add(key)
+
+            channel_results.append(
+                stream
+            )
+
+        if channel_results:
+
+            all_results.append(
+                (
+                    keyword,
+                    channel_results
+                )
+            )
+
+    # =====================================================
+    # 保存
+    # =====================================================
+
+    if all_results:
 
         save_m3u(
-            streams
+            all_results
         )
 
         save_txt(
-            streams
+            all_results
         )
 
     else:
 
         print()
         print(
-            "没有找到直播源。"
+            "所有频道都没有找到直播源。"
         )
+
+    # =====================================================
+    # 统计
+    # =====================================================
+
+    total_streams = sum(
+        len(streams)
+        for keyword, streams in all_results
+    )
 
     print()
     print("=" * 60)
     print("搜索完成")
+    print("=" * 60)
+
+    print(
+        "成功获取频道：",
+        len(all_results)
+    )
+
+    print(
+        "直播源总数：",
+        total_streams
+    )
+
     print("=" * 60)
