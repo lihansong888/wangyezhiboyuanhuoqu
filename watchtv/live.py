@@ -1,27 +1,33 @@
 import requests
-import re
 from bs4 import BeautifulSoup
-from urllib.parse import quote
+
 
 def search_tonkiang(keyword):
-    url = "https://tonkiang.us/"
-    params = {
-        "iptv": keyword
-    }
+    url = "https://tonkiang.us/?"
 
     headers = {
-        "User-Agent": "Mozilla/5.0"
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/140.0.0.0 Safari/537.36"
+        ),
+        "Referer": "https://tonkiang.us/",
+    }
+
+    data = {
+        "seerch": keyword
     }
 
     print(f"\n正在搜索：{keyword}")
-    print(f"请求：{url}?iptv={quote(keyword)}")
+    print("请求方式：POST")
+    print("请求地址：", url)
 
     try:
-        response = requests.get(
+        response = requests.post(
             url,
-            params=params,
+            data=data,
             headers=headers,
-            timeout=20
+            timeout=30
         )
 
         print("HTTP状态：", response.status_code)
@@ -33,50 +39,47 @@ def search_tonkiang(keyword):
 
         soup = BeautifulSoup(response.text, "html.parser")
 
-        # 提取网页中所有链接
-        links = []
+        results = []
 
-        for a in soup.find_all("a"):
-            href = a.get("href", "")
+        # Tonkiang 搜索结果：
+        # <div class="resultplus">
+        #     <div class="channel1">
+        #         ...
+        #         <td class="nl">直播地址</td>
+        #     </div>
+        # </div>
 
-            if not href:
+        for item in soup.select("div.resultplus"):
+            channel = item.select_one("div.channel1")
+            if not channel:
                 continue
 
-            if re.search(
-                r'\.(m3u8|m3u|ts)(\?|$)',
-                href,
-                re.IGNORECASE
-            ):
-                links.append(href)
+            # 找到直播地址
+            for td in item.select("td.nl"):
+                text = td.get_text(strip=True)
 
-        # 有些直播地址不一定在 <a> 标签里，
-        # 所以再从整个网页源码中提取一次
-        urls = re.findall(
-            r'https?://[^\s"\'<>]+(?:m3u8|m3u|ts)(?:\?[^\s"\'<>]*)?',
-            response.text,
-            re.IGNORECASE
-        )
+                if not text:
+                    continue
 
-        links.extend(urls)
+                if (
+                    text.startswith("http://")
+                    or text.startswith("https://")
+                ):
+                    results.append(text)
 
         # 去重
-        result = []
+        results = list(dict.fromkeys(results))
 
-        for link in links:
-            link = link.replace("&amp;", "&")
+        print(f"\n找到 {len(results)} 个直播源：\n")
 
-            if link not in result:
-                result.append(link)
+        for index, stream_url in enumerate(results, 1):
+            print(f"{index}. {stream_url}")
 
-        print(f"\n找到 {len(result)} 个直播源：\n")
-
-        for i, link in enumerate(result, 1):
-            print(f"{i}. {link}")
-
-        return result
+        return results
 
     except Exception as e:
-        print("发生错误：", e)
+        print("\n发生错误：")
+        print(e)
         return []
 
 
