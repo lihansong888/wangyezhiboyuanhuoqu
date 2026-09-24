@@ -1,6 +1,7 @@
 import requests
 import re
 import urllib3
+import os
 from urllib.parse import quote
 
 urllib3.disable_warnings(
@@ -51,8 +52,23 @@ HEADERS = {
 
 TIMEOUT = 30
 
-M3U_FILE = "live.m3u8"
-TXT_FILE = "live.txt"
+# =========================================================
+# 关键：文件固定生成到 live.py 所在的 watchtv 文件夹
+# =========================================================
+
+BASE_DIR = os.path.dirname(
+    os.path.abspath(__file__)
+)
+
+M3U_FILE = os.path.join(
+    BASE_DIR,
+    "live.m3u8"
+)
+
+TXT_FILE = os.path.join(
+    BASE_DIR,
+    "live.txt"
+)
 
 
 # =========================================================
@@ -239,7 +255,7 @@ def search_channel(session, channel):
             )
 
     # =====================================================
-    # 当前频道去重
+    # 当前频道内部去重
     # =====================================================
 
     unique = []
@@ -281,13 +297,16 @@ def search_channel(session, channel):
 
 # =========================================================
 # 总去重
+#
+# 同一个直播地址如果出现在不同频道结果中，
+# 只保留第一次出现的地址。
 # =========================================================
 
 def deduplicate(channel_results):
 
     final_results = []
 
-    seen = set()
+    global_seen = set()
 
     for channel, streams in channel_results:
 
@@ -295,17 +314,16 @@ def deduplicate(channel_results):
 
         for stream in streams:
 
-            # 同一个频道 + 同一个地址
-            # 才算完全重复
-            key = (
-                channel,
-                stream
-            )
+            stream = stream.strip()
 
-            if key in seen:
+            if not stream:
                 continue
 
-            seen.add(key)
+            # 直播源地址完全相同则去重
+            if stream in global_seen:
+                continue
+
+            global_seen.add(stream)
 
             unique_streams.append(
                 stream
@@ -427,9 +445,17 @@ def main():
     )
 
     print(
-        "输出文件：",
-        M3U_FILE,
-        "+",
+        "输出目录：",
+        BASE_DIR
+    )
+
+    print(
+        "M3U8 文件：",
+        M3U_FILE
+    )
+
+    print(
+        "TXT 文件：",
         TXT_FILE
     )
 
@@ -462,7 +488,7 @@ def main():
         )
 
     # =====================================================
-    # 去重
+    # 直播源地址去重
     # =====================================================
 
     channel_results = deduplicate(
@@ -531,5 +557,4 @@ def main():
 # =========================================================
 
 if __name__ == "__main__":
-
     main()
