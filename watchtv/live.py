@@ -4,15 +4,12 @@ import urllib3
 from bs4 import BeautifulSoup
 from urllib.parse import quote
 
-# 忽略自签名证书警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
-# ============================================================
-# 基础配置
-# ============================================================
-
 KEYWORD = "CCTV1"
+
+URL = "https://www.foodieguide.com/iptvsearch/"
 
 HEADERS = {
     "User-Agent": (
@@ -29,43 +26,140 @@ HEADERS = {
 }
 
 
-# ============================================================
-# 提取直播地址
-# ============================================================
+def clean_url(url):
 
-def extract_urls(text):
+    if not url:
+        return None
 
-    urls = []
+    url = url.replace("&amp;", "&")
+    url = url.replace("\\/", "/")
 
-    # 直接从源码中寻找 http/https 的直播地址
+    # 去掉 HTML / JS 常见尾部字符
+    url = url.strip()
+    url = url.rstrip("'\"),;]} >")
+
+    if not url.startswith(("http://", "https://")):
+        return None
+
+    return url
+
+
+def is_stream_url(url):
+
+    if not url:
+        return False
+
+    return bool(
+        re.search(
+            r'\.(m3u8|m3u|ts)(?:\?|$)',
+            url,
+            re.IGNORECASE
+        )
+    )
+
+
+def extract_streams(html):
+
+    results = []
+
+    def add(url):
+
+        url = clean_url(url)
+
+        if not url:
+            return
+
+        if is_stream_url(url):
+
+            if url not in results:
+                results.append(url)
+
+    # ========================================================
+    # 1. 直接搜索网页源码中的直播地址
+    # ========================================================
+
     patterns = [
-        r'https?://[^\s"\'<>]+?\.m3u8(?:\?[^\s"\'<>]*)?',
-        r'https?://[^\s"\'<>]+?\.m3u(?:\?[^\s"\'<>]*)?',
-        r'https?://[^\s"\'<>]+?\.ts(?:\?[^\s"\'<>]*)?',
+
+        # http://xxx.m3u8
+        r'https?://[^\'"\s<>]+?\.m3u8(?:\?[^\'"\s<>]*)?',
+
+        # http://xxx.m3u
+        r'https?://[^\'"\s<>]+?\.m3u(?:\?[^\'"\s<>]*)?',
+
+        # http://xxx.ts
+        r'https?://[^\'"\s<>]+?\.ts(?:\?[^\'"\s<>]*)?',
     ]
 
     for pattern in patterns:
-        found = re.findall(pattern, text, re.IGNORECASE)
 
-        for url in found:
+        matches = re.findall(
+            pattern,
+            html,
+            re.IGNORECASE
+        )
 
-            # 清理 HTML 编码
-            url = url.replace("&amp;", "&")
-            url = url.rstrip("),;]}")
-
-            if url not in urls:
-                urls.append(url)
-
-    return urls
+        for url in matches:
+            add(url)
 
 
-# ============================================================
-# 搜索 FoodieGuide
-# ============================================================
+    # ========================================================
+    # 2. 解析 onclick
+    #
+    # FoodieGuide 页面实际上大量使用：
+    #
+    # onclick="yaergl('http://xxx/live/cctv1.m3u8')"
+    #
+    # ========================================================
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    for tag in soup.find_all(True):
+
+        onclick = tag.get("onclick", "")
+
+        if onclick:
+
+            matches = re.findall(
+                r'https?://[^\'"\s<>]+',
+                onclick,
+                re.IGNORECASE
+            )
+
+            for url in matches:
+                add(url)
+
+
+    # ========================================================
+    # 3. 检查所有 href
+    # ========================================================
+
+    for tag in soup.find_all("a"):
+
+        href = tag.get("href", "")
+
+        add(href)
+
+
+    # ========================================================
+    # 4. 检查网页所有纯文本
+    # ========================================================
+
+    text = soup.get_text(" ", strip=True)
+
+    matches = re.findall(
+        r'https?://[^\'"\s<>]+',
+        text,
+        re.IGNORECASE
+    )
+
+    for url in matches:
+        add(url)
+
+
+    return results
+
 
 def search_foodieguide(keyword):
-
-    url = "https://www.foodieguide.com/iptvsearch/"
 
     params = {
         "iptv": keyword
@@ -76,21 +170,17 @@ def search_foodieguide(keyword):
     print("正在搜索：", keyword)
     print(
         "请求地址：",
-        url + "?iptv=" + quote(keyword)
+        URL + "?iptv=" + quote(keyword)
     )
     print("=" * 60)
 
     try:
 
         response = requests.get(
-            url,
+            URL,
             params=params,
             headers=HEADERS,
             timeout=30,
-
-            # 关键：
-            # FoodieGuide 当前证书存在 self-signed 问题
-            # GitHub Actions 默认会拒绝该证书
             verify=False
         )
 
@@ -98,78 +188,57 @@ def search_foodieguide(keyword):
         print("网页长度：", len(response.text))
 
         if response.status_code != 200:
+
             print("请求失败")
             return []
 
-        # ----------------------------------------------------
-        # 方法一：直接从网页源码提取
-        # ----------------------------------------------------
+        # ====================================================
+        # 提取直播源
+        # ====================================================
 
-        urls = extract_urls(response.text)
-
-        # ----------------------------------------------------
-        # 方法二：BeautifulSoup 检查所有链接
-        # ----------------------------------------------------
-
-        soup = BeautifulSoup(response.text, "html.parser")
-
-        for a in soup.find_all("a"):
-
-            href = a.get("href", "")
-
-            if not href:
-                continue
-
-            href = href.replace("&amp;", "&")
-
-            if re.search(
-                r'\.(m3u8|m3u|ts)(\?|$)',
-                href,
-                re.IGNORECASE
-            ):
-
-                if href not in urls:
-                    urls.append(href)
-
-        # ----------------------------------------------------
-        # 去重
-        # ----------------------------------------------------
-
-        result = []
-
-        for url in urls:
-
-            if url not in result:
-                result.append(url)
+        results = extract_streams(response.text)
 
         print("")
-        print("找到直播源：", len(result))
+        print("找到直播源：", len(results))
         print("")
 
-        if result:
+        if results:
 
-            for i, stream in enumerate(result, 1):
+            for i, url in enumerate(results, 1):
 
-                print(f"{i}. {stream}")
+                print(f"{i}. {url}")
 
         else:
 
-            print("没有找到 m3u8 / m3u / ts 地址")
+            print("没有找到直播源")
 
-        return result
+            # =================================================
+            # 为了下一步排查，把关键 HTML 打印出来
+            # =================================================
+
+            print("")
+            print("正在检查网页中的 m3u8 相关内容...")
+
+            for line in response.text.splitlines():
+
+                if (
+                    "m3u8" in line.lower()
+                    or "m3u" in line.lower()
+                    or "yaergl" in line.lower()
+                ):
+
+                    print(line[:1000])
+
+        return results
 
     except Exception as e:
 
         print("")
-        print("发生错误：")
+        print("网络请求错误：")
         print(e)
 
         return []
 
-
-# ============================================================
-# 主程序
-# ============================================================
 
 if __name__ == "__main__":
 
@@ -180,11 +249,3 @@ if __name__ == "__main__":
     print("搜索结束")
     print("直播源数量：", len(results))
     print("=" * 60)
-
-    if results:
-
-        print("")
-        print("最终直播源：")
-
-        for url in results:
-            print(url)
