@@ -51,6 +51,9 @@ HEADERS = {
 
 TIMEOUT = 30
 
+M3U_FILE = "live.m3u8"
+TXT_FILE = "live.txt"
+
 
 # =========================================================
 # 提取直播源
@@ -61,7 +64,6 @@ def extract_urls(html):
     if not html:
         return []
 
-    # 处理网页中的各种转义
     html = html.replace("\\/", "/")
     html = html.replace("\\:", ":")
     html = html.replace("\\u002F", "/")
@@ -69,10 +71,6 @@ def extract_urls(html):
     html = html.replace("&amp;", "&")
 
     results = []
-
-    # =====================================================
-    # 直接提取 http / https 地址
-    # =====================================================
 
     urls = re.findall(
         r'https?://[^\s"\'<>\\]+',
@@ -90,7 +88,6 @@ def extract_urls(html):
 
         lower = url.lower()
 
-        # 直播地址特征
         if any(
             key in lower
             for key in [
@@ -107,7 +104,6 @@ def extract_urls(html):
         ):
 
             if url not in results:
-
                 results.append(url)
 
     return results
@@ -117,36 +113,20 @@ def extract_urls(html):
 # 搜索单个频道
 # =========================================================
 
-def search_channel(
-    session,
-    channel
-):
+def search_channel(session, channel):
 
     print()
     print("=" * 60)
-    print(
-        "正在搜索：",
-        channel
-    )
+    print("正在搜索：", channel)
     print("=" * 60)
-
-    # =====================================================
-    # 第一入口
-    # =====================================================
 
     params = {
         "chname": channel
     }
 
-    search_url = (
-        BASE_URL
-        + "?chname="
-        + quote(channel)
-    )
-
     print(
         "请求入口：",
-        search_url
+        BASE_URL + "?chname=" + quote(channel)
     )
 
     try:
@@ -162,10 +142,7 @@ def search_channel(
 
     except Exception as e:
 
-        print(
-            "请求失败：",
-            e
-        )
+        print("请求失败：", e)
 
         return []
 
@@ -203,12 +180,7 @@ def search_channel(
     )
 
     # =====================================================
-    # 第二入口
-    #
-    # 如果第一入口没有找到源，
-    # 再尝试：
-    #
-    # page=1&chname=CCTV1&l=0
+    # 第一入口没有结果时，尝试第二入口
     # =====================================================
 
     if not streams:
@@ -267,7 +239,7 @@ def search_channel(
             )
 
     # =====================================================
-    # 当前频道内部去重
+    # 当前频道去重
     # =====================================================
 
     unique = []
@@ -295,10 +267,6 @@ def search_channel(
         len(unique)
     )
 
-    # =====================================================
-    # 显示当前频道结果
-    # =====================================================
-
     for index, stream in enumerate(
         unique,
         1
@@ -312,111 +280,10 @@ def search_channel(
 
 
 # =========================================================
-# 保存总 M3U
-# =========================================================
-
-def save_m3u(all_streams):
-
-    filename = "live_results.m3u"
-
-    try:
-
-        with open(
-            filename,
-            "w",
-            encoding="utf-8"
-        ) as file:
-
-            file.write(
-                "#EXTM3U\n"
-            )
-
-            for channel, streams in all_streams:
-
-                for stream in streams:
-
-                    file.write(
-                        "#EXTINF:-1,"
-                        + channel
-                        + "\n"
-                    )
-
-                    file.write(
-                        stream
-                        + "\n"
-                    )
-
-        print()
-        print(
-            "M3U 文件已生成：",
-            filename
-        )
-
-    except Exception as e:
-
-        print(
-            "M3U 保存失败：",
-            e
-        )
-
-
-# =========================================================
-# 保存总 TXT
-# =========================================================
-
-def save_txt(all_streams):
-
-    filename = "live_results.txt"
-
-    try:
-
-        with open(
-            filename,
-            "w",
-            encoding="utf-8"
-        ) as file:
-
-            for channel, streams in all_streams:
-
-                for stream in streams:
-
-                    file.write(
-                        channel
-                        + " | "
-                        + stream
-                        + "\n"
-                    )
-
-        print(
-            "TXT 文件已生成：",
-            filename
-        )
-
-    except Exception as e:
-
-        print(
-            "TXT 保存失败：",
-            e
-        )
-
-
-# =========================================================
 # 总去重
-#
-# 相同频道 + 相同地址：
-# 删除重复
-#
-# 相同频道 + 不同地址：
-# 全部保留
-#
-# 不同频道 + 相同地址：
-# 暂时也保留
-#
 # =========================================================
 
-def deduplicate(
-    channel_results
-):
+def deduplicate(channel_results):
 
     final_results = []
 
@@ -428,6 +295,8 @@ def deduplicate(
 
         for stream in streams:
 
+            # 同一个频道 + 同一个地址
+            # 才算完全重复
             key = (
                 channel,
                 stream
@@ -453,6 +322,91 @@ def deduplicate(
 
 
 # =========================================================
+# 生成 M3U8
+# =========================================================
+
+def save_m3u8(channel_results):
+
+    try:
+
+        with open(
+            M3U_FILE,
+            "w",
+            encoding="utf-8"
+        ) as file:
+
+            file.write(
+                "#EXTM3U\n"
+            )
+
+            for channel, streams in channel_results:
+
+                for stream in streams:
+
+                    file.write(
+                        "#EXTINF:-1,"
+                        + channel
+                        + "\n"
+                    )
+
+                    file.write(
+                        stream
+                        + "\n"
+                    )
+
+        print()
+        print(
+            "M3U8 文件已生成：",
+            M3U_FILE
+        )
+
+    except Exception as e:
+
+        print(
+            "M3U8 文件生成失败：",
+            e
+        )
+
+
+# =========================================================
+# 生成 TXT
+# =========================================================
+
+def save_txt(channel_results):
+
+    try:
+
+        with open(
+            TXT_FILE,
+            "w",
+            encoding="utf-8"
+        ) as file:
+
+            for channel, streams in channel_results:
+
+                for stream in streams:
+
+                    file.write(
+                        channel
+                        + " | "
+                        + stream
+                        + "\n"
+                    )
+
+        print(
+            "TXT 文件已生成：",
+            TXT_FILE
+        )
+
+    except Exception as e:
+
+        print(
+            "TXT 文件生成失败：",
+            e
+        )
+
+
+# =========================================================
 # 主程序
 # =========================================================
 
@@ -472,6 +426,13 @@ def main():
         "搜索引擎：FoodieGuide"
     )
 
+    print(
+        "输出文件：",
+        M3U_FILE,
+        "+",
+        TXT_FILE
+    )
+
     print("=" * 60)
 
     session = requests.Session()
@@ -483,7 +444,7 @@ def main():
     channel_results = []
 
     # =====================================================
-    # 依次搜索所有频道
+    # 搜索所有频道
     # =====================================================
 
     for channel in CHANNELS:
@@ -501,7 +462,7 @@ def main():
         )
 
     # =====================================================
-    # 总去重
+    # 去重
     # =====================================================
 
     channel_results = deduplicate(
@@ -538,12 +499,12 @@ def main():
     print("=" * 60)
 
     # =====================================================
-    # 保存
+    # 生成文件
     # =====================================================
 
     if total > 0:
 
-        save_m3u(
+        save_m3u8(
             channel_results
         )
 
@@ -555,7 +516,8 @@ def main():
 
         print()
         print(
-            "没有找到任何直播源。"
+            "没有找到任何直播源，"
+            "不生成空文件。"
         )
 
     print()
