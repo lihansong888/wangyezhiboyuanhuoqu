@@ -16,10 +16,10 @@ urllib3.disable_warnings(
 FOODIE_URL = "https://www.foodieguide.com/iptvsearch/"
 
 CHANNELS = [
-    "CCTV1",
-    "CCTV2",
-    "CCTV3",
-    "CCTV4",
+    "凤凰中文",
+    "凤凰资讯",
+    "翡翠台",
+    "靖天电影",
     "CCTV5",
     "CCTV5+",
     "CCTV6",
