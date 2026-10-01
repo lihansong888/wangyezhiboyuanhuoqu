@@ -20,20 +20,7 @@ CHANNELS = [
     "凤凰资讯",
     "翡翠台",
     "靖天电影",
-    "CCTV5",
-    "CCTV5+",
-    "CCTV6",
-    "CCTV7",
-    "CCTV8",
-    "CCTV9",
-    "CCTV10",
-    "CCTV11",
-    "CCTV12",
-    "CCTV13",
-    "CCTV14",
-    "CCTV15",
-    "CCTV16",
-    "CCTV17",
+    
 ]
 
 HEADERS = {
