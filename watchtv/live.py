@@ -15,12 +15,12 @@ urllib3.disable_warnings(
 
 FOODIE_URL = "https://www.foodieguide.com/iptvsearch/"
 
+# 这里可以直接修改测试频道
 CHANNELS = [
     "凤凰中文",
     "凤凰资讯",
     "翡翠台",
     "靖天电影",
-    
 ]
 
 HEADERS = {
@@ -139,7 +139,10 @@ def extract_urls(text):
 
     results = []
 
-    # 普通 URL
+    # -----------------------------------------------------
+    # 普通 HTTP / HTTPS URL
+    # -----------------------------------------------------
+
     pattern = re.compile(
         r'https?://'
         r'(?:'
@@ -158,9 +161,13 @@ def extract_urls(text):
         url = clean_url(match)
 
         if is_candidate_url(url):
+
             results.append(url)
 
-    # 引号里的 URL
+    # -----------------------------------------------------
+    # 引号中的 URL
+    # -----------------------------------------------------
+
     pattern2 = re.compile(
         r'["\'](https?://[^"\']+)["\']',
         re.IGNORECASE
@@ -171,13 +178,14 @@ def extract_urls(text):
         url = clean_url(match)
 
         if is_candidate_url(url):
+
             results.append(url)
 
     return results
 
 
 # =========================================================
-# 单个频道内部去重
+# URL 去重
 # =========================================================
 
 def unique_urls(urls):
@@ -198,18 +206,20 @@ def unique_urls(urls):
             continue
 
         seen.add(key)
+
         result.append(url)
 
     return result
 
 
 # =========================================================
-# 全局直播源去重
+# 全局去重
 # =========================================================
 
 def deduplicate(channel_results):
 
     seen = set()
+
     result = []
 
     for channel, urls in channel_results:
@@ -253,15 +263,18 @@ def search_foodieguide(
 
     print()
     print("=" * 60)
-    print("FoodieGuide：", channel)
+    print(
+        "FoodieGuide：",
+        channel
+    )
     print("=" * 60)
 
     urls = []
 
-    # -----------------------------------------------------
-    # 方式 1
-    # ?chname=CCTV1
-    # -----------------------------------------------------
+    # =====================================================
+    # 入口 1
+    # ?chname=频道
+    # =====================================================
 
     try:
 
@@ -282,17 +295,28 @@ def search_foodieguide(
         )
 
         print(
-            "页面长度：",
+            "入口1 最终地址：",
+            response.url
+        )
+
+        print(
+            "入口1 页面长度：",
             len(response.text)
         )
 
         if response.status_code == 200:
 
-            urls.extend(
-                extract_urls(
-                    response.text
-                )
+            found = extract_urls(
+                response.text
             )
+
+            print(
+                "入口1 找到：",
+                len(found),
+                "条"
+            )
+
+            urls.extend(found)
 
     except Exception as e:
 
@@ -301,10 +325,10 @@ def search_foodieguide(
             e
         )
 
-    # -----------------------------------------------------
-    # 方式 2
-    # ?page=1&chname=CCTV1&l=0
-    # -----------------------------------------------------
+    # =====================================================
+    # 入口 2
+    # ?page=1&chname=频道&l=0
+    # =====================================================
 
     try:
 
@@ -327,17 +351,28 @@ def search_foodieguide(
         )
 
         print(
-            "页面长度：",
+            "入口2 最终地址：",
+            response.url
+        )
+
+        print(
+            "入口2 页面长度：",
             len(response.text)
         )
 
         if response.status_code == 200:
 
-            urls.extend(
-                extract_urls(
-                    response.text
-                )
+            found = extract_urls(
+                response.text
             )
+
+            print(
+                "入口2 找到：",
+                len(found),
+                "条"
+            )
+
+            urls.extend(found)
 
     except Exception as e:
 
@@ -346,10 +381,10 @@ def search_foodieguide(
             e
         )
 
-    # -----------------------------------------------------
-    # 方式 3
-    # POST seerch=CCTV1
-    # -----------------------------------------------------
+    # =====================================================
+    # 入口 3
+    # POST seerch=频道
+    # =====================================================
 
     try:
 
@@ -370,17 +405,28 @@ def search_foodieguide(
         )
 
         print(
+            "POST 最终地址：",
+            response.url
+        )
+
+        print(
             "POST 页面长度：",
             len(response.text)
         )
 
         if response.status_code == 200:
 
-            urls.extend(
-                extract_urls(
-                    response.text
-                )
+            found = extract_urls(
+                response.text
             )
+
+            print(
+                "POST 找到：",
+                len(found),
+                "条"
+            )
+
+            urls.extend(found)
 
     except Exception as e:
 
@@ -389,11 +435,16 @@ def search_foodieguide(
             e
         )
 
+    # =====================================================
+    # 当前频道去重
+    # =====================================================
+
     urls = unique_urls(urls)
 
+    print()
     print(
         channel,
-        "候选源：",
+        "最终候选源：",
         len(urls)
     )
 
@@ -407,215 +458,6 @@ def search_foodieguide(
         )
 
     return urls
-
-
-# =========================================================
-# 检测直播源
-# =========================================================
-
-def check_stream(
-    session,
-    url
-):
-
-    lower = url.lower()
-
-    # RTP / UDP / 组播
-    # GitHub Actions 无法可靠验证
-    if (
-        "/rtp/" in lower
-        or lower.startswith("rtp://")
-        or lower.startswith("udp://")
-    ):
-        return None
-
-    try:
-
-        response = session.get(
-            url,
-            headers={
-                **HEADERS,
-                "Range": "bytes=0-8191",
-            },
-            timeout=8,
-            verify=False,
-            allow_redirects=True,
-            stream=True
-        )
-
-        status = response.status_code
-
-        content_type = (
-            response.headers
-            .get(
-                "Content-Type",
-                ""
-            )
-            .lower()
-        )
-
-        if status not in (
-            200,
-            206
-        ):
-
-            response.close()
-            return False
-
-        # -------------------------------------------------
-        # M3U8 检测
-        # -------------------------------------------------
-
-        if (
-            ".m3u8" in lower
-            or "mpegurl" in content_type
-            or "application/vnd.apple.mpegurl"
-            in content_type
-        ):
-
-            try:
-
-                data = response.raw.read(
-                    8192
-                )
-
-                response.close()
-
-                text = data.decode(
-                    "utf-8",
-                    errors="ignore"
-                )
-
-                if (
-                    "#EXTM3U" in text
-                    or "#EXTINF" in text
-                    or "#EXT-X-" in text
-                ):
-
-                    return True
-
-                return False
-
-            except Exception:
-
-                response.close()
-                return False
-
-        # -------------------------------------------------
-        # 其他 HTTP 直播源
-        # -------------------------------------------------
-
-        response.close()
-
-        return True
-
-    except Exception:
-
-        return False
-
-
-# =========================================================
-# 检测所有直播源
-# =========================================================
-
-def validate_streams(
-    session,
-    channel_results
-):
-
-    print()
-    print("=" * 60)
-    print("开始检测直播源")
-    print("=" * 60)
-
-    final_results = []
-
-    total = 0
-    alive = 0
-    unknown = 0
-
-    for channel, urls in channel_results:
-
-        valid_urls = []
-
-        for url in urls:
-
-            total += 1
-
-            result = check_stream(
-                session,
-                url
-            )
-
-            if result is True:
-
-                alive += 1
-
-                valid_urls.append(
-                    url
-                )
-
-                print(
-                    "✓ 有效：",
-                    channel,
-                    url
-                )
-
-            elif result is None:
-
-                unknown += 1
-
-                valid_urls.append(
-                    url
-                )
-
-                print(
-                    "? 无法验证：",
-                    channel,
-                    url
-                )
-
-            else:
-
-                print(
-                    "✗ 失效：",
-                    channel,
-                    url
-                )
-
-        final_results.append(
-            (
-                channel,
-                valid_urls
-            )
-        )
-
-    print()
-    print("=" * 60)
-    print("检测统计")
-    print("=" * 60)
-
-    print(
-        "检测候选源：",
-        total
-    )
-
-    print(
-        "HTTP/HLS 有效：",
-        alive
-    )
-
-    print(
-        "无法验证的 RTP/组播：",
-        unknown
-    )
-
-    print(
-        "最终保留：",
-        alive + unknown
-    )
-
-    return final_results
 
 
 # =========================================================
@@ -644,7 +486,7 @@ def save_m3u8(
                 file.write(
                     '#EXTINF:-1 '
                     f'tvg-name="{channel}" '
-                    'group-title="央视",'
+                    'group-title="直播",'
                     f'{channel}\n'
                 )
 
@@ -668,8 +510,8 @@ def save_m3u8(
 # 央视,#genre#
 # CCTV1,http://xxx
 # CCTV1,http://xxx
-# CCTV2,http://xxx
 #
+# 现在测试其他频道也保持相同格式
 # =========================================================
 
 def save_txt(
@@ -684,7 +526,7 @@ def save_txt(
     ) as file:
 
         file.write(
-            "央视,#genre#\n"
+            "直播,#genre#\n"
         )
 
         for channel, urls in channel_results:
@@ -713,16 +555,20 @@ def main():
     print("=" * 60)
 
     print(
-        "搜索频道数量：",
+        "频道数量：",
         len(CHANNELS)
     )
 
     print(
-        "搜索引擎：FoodieGuide"
+        "搜索入口：FoodieGuide"
     )
 
     print(
-        "不限制最终直播源数量"
+        "当前模式：只搜索，不检测播放"
+    )
+
+    print(
+        "最终源数量：不限制"
     )
 
     print("=" * 60)
@@ -734,7 +580,7 @@ def main():
     )
 
     # =====================================================
-    # 第一阶段：搜索
+    # 搜索所有频道
     # =====================================================
 
     channel_results = []
@@ -753,60 +599,41 @@ def main():
             )
         )
 
-        # 稍微降低请求频率
         time.sleep(0.5)
 
     # =====================================================
-    # 第二阶段：全局 URL 去重
+    # 全局 URL 去重
     # =====================================================
 
     print()
     print("=" * 60)
-    print("全局去重")
+    print("全局 URL 去重")
     print("=" * 60)
 
     channel_results = deduplicate(
         channel_results
     )
 
-    candidate_total = sum(
-        len(urls)
-        for _, urls
-        in channel_results
-    )
-
-    print(
-        "去重后候选源：",
-        candidate_total
-    )
-
     # =====================================================
-    # 第三阶段：检测
-    # =====================================================
-
-    channel_results = validate_streams(
-        session,
-        channel_results
-    )
-
-    # =====================================================
-    # 最终统计
+    # 统计
     # =====================================================
 
     print()
     print("=" * 60)
-    print("最终结果")
+    print("搜索结果统计")
     print("=" * 60)
 
     total = 0
 
     for channel, urls in channel_results:
 
+        count = len(urls)
+
         print(
-            f"{channel}: {len(urls)} 条"
+            f"{channel}: {count} 条"
         )
 
-        total += len(urls)
+        total += count
 
     print()
     print(
@@ -829,23 +656,13 @@ def main():
     )
 
     # =====================================================
-    # 检查文件
+    # 文件检查
     # =====================================================
 
     print()
     print("=" * 60)
     print("文件检查")
     print("=" * 60)
-
-    print(
-        "M3U8 路径：",
-        M3U_FILE
-    )
-
-    print(
-        "TXT 路径：",
-        TXT_FILE
-    )
 
     print(
         "M3U8 存在：",
