@@ -1,5 +1,8 @@
-import requests
+import os
 import re
+import html
+import time
+import requests
 import urllib3
 from urllib.parse import quote
 
@@ -11,18 +14,41 @@ urllib3.disable_warnings(
 # 配置
 # =========================================================
 
-KEYWORD = "凤凰中文"
+BASE_DIR = os.path.dirname(
+    os.path.abspath(__file__)
+)
 
-# 同一个频道使用多个关键词搜索
-SEARCH_KEYWORDS = [
+M3U_FILE = os.path.join(
+    BASE_DIR,
+    "live.m3u8"
+)
+
+TXT_FILE = os.path.join(
+    BASE_DIR,
+    "live.txt"
+)
+
+FOODIE_URL = "https://www.foodieguide.com/iptvsearch/"
+
+TONKIANG_BASE = "https://tonkiang.us/"
+
+# =========================================================
+# 当前测试频道
+#
+# 确认这几个频道正常以后，
+# 再恢复 CCTV 全部频道即可。
+# =========================================================
+
+CHANNELS = [
     "凤凰中文",
-    "凤凰卫视中文",
-    "凤凰卫视",
-    "Phoenix Chinese",
-    "Phoenix TV"
+    "凤凰资讯",
+    "翡翠台",
+    "靖天电影",
 ]
 
-BASE_URL = "https://www.foodieguide.com/iptvsearch/"
+# =========================================================
+# 请求头
+# =========================================================
 
 HEADERS = {
     "User-Agent": (
@@ -36,104 +62,51 @@ HEADERS = {
         "image/webp,*/*;q=0.8"
     ),
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-    "Referer": "https://www.foodieguide.com/",
+    "Connection": "keep-alive",
 }
 
-TIMEOUT = 30
+TIMEOUT = 20
+
+# =========================================================
+# 频道搜索关键词
+#
+# 一个频道可以搜索多个不同写法
+# =========================================================
+
+CHANNEL_ALIASES = {
+
+    "凤凰中文": [
+        "凤凰中文",
+        "凤凰卫视中文台",
+        "凤凰卫视",
+        "凤凰中文台",
+    ],
+
+    "凤凰资讯": [
+        "凤凰资讯",
+        "凤凰资讯台",
+        "凤凰卫视资讯台",
+    ],
+
+    "翡翠台": [
+        "翡翠台",
+        "TVB翡翠台",
+        "TVB",
+        "翡翠",
+    ],
+
+    "靖天电影": [
+        "靖天电影",
+        "靖天影院",
+        "靖天影城",
+    ],
+
+    
+}
 
 
 # =========================================================
-# 判断是否像直播源
-# =========================================================
-
-def is_stream_url(url):
-
-    if not url:
-        return False
-
-    lower = url.lower()
-
-    # 常见协议
-    if lower.startswith("http://"):
-        return True
-
-    if lower.startswith("https://"):
-        return True
-
-    if lower.startswith("rtp://"):
-        return True
-
-    if lower.startswith("udp://"):
-        return True
-
-    if lower.startswith("rtsp://"):
-        return True
-
-    if lower.startswith("igmp://"):
-        return True
-
-    # 常见直播格式
-    stream_extensions = [
-        ".m3u8",
-        ".m3u",
-        ".ts",
-        ".flv",
-        ".mp4",
-        ".mpd",
-        ".aac"
-    ]
-
-    if any(
-        ext in lower
-        for ext in stream_extensions
-    ):
-        return True
-
-    # 常见 IPTV 路径
-    stream_paths = [
-        "/live/",
-        "/stream/",
-        "/channel/",
-        "/playlist/",
-        "/play/",
-        "/rtp/",
-        "/udp/",
-        "/hls/",
-        "/flv/",
-        "/ts/",
-        "/video/",
-        "/tv/",
-        "/iptv/",
-        "/liveplay/",
-        "/live_stream/",
-        "/livestream/",
-        "/media/",
-        "/p2p/"
-    ]
-
-    if any(
-        path in lower
-        for path in stream_paths
-    ):
-        return True
-
-    # 组播地址
-    multicast = re.search(
-        r'(?<![\d.])'
-        r'(22[4-9]|23[0-9])'
-        r'(?:\.\d{1,3}){3}'
-        r'(?:[:]\d{1,6})?',
-        url
-    )
-
-    if multicast:
-        return True
-
-    return False
-
-
-# =========================================================
-# 清理 URL
+# URL 清理
 # =========================================================
 
 def clean_url(url):
@@ -141,194 +114,371 @@ def clean_url(url):
     if not url:
         return ""
 
-    url = url.strip()
+    url = html.unescape(url)
 
     url = url.replace("\\/", "/")
-    url = url.replace("\\:", ":")
     url = url.replace("\\u002F", "/")
     url = url.replace("\\x2F", "/")
-    url = url.replace("\\u003A", ":")
-    url = url.replace("\\x3A", ":")
-    url = url.replace("&amp;", "&")
+
+    url = url.strip()
+
+    url = url.strip(
+        "\"'<>"
+    )
 
     url = url.rstrip(
-        ".,;，。；）)]}>\"'"
+        ".,;，。；）)]}>"
     )
 
     return url
 
 
 # =========================================================
-# 提取直播源
+# 判断 URL 是否像直播源
 # =========================================================
 
-def extract_urls(html):
+def is_candidate_url(url):
 
-    if not html:
+    if not url:
+        return False
+
+    lower = url.lower()
+
+    if not (
+        lower.startswith("http://")
+        or lower.startswith("https://")
+    ):
+        return False
+
+    keywords = [
+        ".m3u8",
+        ".m3u",
+        ".ts",
+        ".flv",
+        ".mp4",
+        "/live/",
+        "/hls/",
+        "/rtp/",
+        "/rtmp/",
+        "/tsfile/",
+        "/stream/",
+        "/channel/",
+        "/playlist/",
+        "/play/",
+        "/video/",
+    ]
+
+    return any(
+        x in lower
+        for x in keywords
+    )
+
+
+# =========================================================
+# 提取网页中的直播地址
+# =========================================================
+
+def extract_urls(text):
+
+    if not text:
         return []
 
-    html = html.replace("\\/", "/")
-    html = html.replace("\\:", ":")
-    html = html.replace("\\u002F", "/")
-    html = html.replace("\\x2F", "/")
-    html = html.replace("\\u003A", ":")
-    html = html.replace("\\x3A", ":")
-    html = html.replace("&amp;", "&")
+    text = html.unescape(text)
+
+    text = text.replace(
+        "\\/",
+        "/"
+    )
 
     results = []
 
-    # =====================================================
-    # HTTP / HTTPS / RTP / UDP / RTSP / IGMP
-    # =====================================================
+    # -----------------------------------------------------
+    # HTTP / HTTPS
+    # -----------------------------------------------------
 
-    urls = re.findall(
-        r'(?:https?|rtp|udp|rtsp|igmp)://[^\s"\'<>\\]+',
-        html,
+    pattern = re.compile(
+        r'https?://'
+        r'(?:'
+        r'\[[0-9a-fA-F:]+\]'
+        r'|'
+        r'[A-Za-z0-9._:-]+'
+        r')'
+        r'(?:'
+        r'[^"\'<>\s\\)]*'
+        r')',
         re.IGNORECASE
     )
 
-    for url in urls:
+    for item in pattern.findall(text):
 
-        url = clean_url(url)
+        url = clean_url(item)
 
-        if is_stream_url(url):
+        if is_candidate_url(url):
 
-            if url not in results:
-                results.append(url)
+            results.append(url)
 
-    # =====================================================
-    # 转义 URL
-    # =====================================================
+    # -----------------------------------------------------
+    # 引号 URL
+    # -----------------------------------------------------
 
-    escaped_urls = re.findall(
-        r'(?:https?|rtp|udp|rtsp|igmp)\\?://[^\s"\'<>]+',
-        html,
+    pattern2 = re.compile(
+        r'["\'](https?://[^"\']+)["\']',
         re.IGNORECASE
     )
 
-    for url in escaped_urls:
+    for item in pattern2.findall(text):
 
-        url = clean_url(url)
+        url = clean_url(item)
 
-        if is_stream_url(url):
+        if is_candidate_url(url):
 
-            if url not in results:
-                results.append(url)
-
-    # =====================================================
-    # 组播地址
-    # =====================================================
-
-    multicast_urls = re.findall(
-        r'(?<![\d.])'
-        r'(?:22[4-9]|23[0-9])'
-        r'(?:\.\d{1,3}){3}'
-        r'(?:[:]\d{1,6})?',
-        html
-    )
-
-    for multicast in multicast_urls:
-
-        url = "udp://" + multicast
-
-        if url not in results:
             results.append(url)
 
-    # =====================================================
-    # 裸 IP:端口
-    # =====================================================
+    return results
 
-    ip_port_pattern = re.findall(
-        r'(?<![\d/])'
-        r'(?:\d{1,3}\.){3}\d{1,3}'
-        r':\d{2,6}'
-        r'(?!\d)',
-        html
-    )
 
-    stream_ports = {
-        "80",
-        "81",
-        "443",
-        "554",
-        "8000",
-        "8001",
-        "8080",
-        "8081",
-        "8088",
-        "8888",
-        "9000",
-        "9090",
-        "9981",
-        "9982"
-    }
+# =========================================================
+# URL 去重
+# =========================================================
 
-    for ip_port in ip_port_pattern:
+def unique_urls(urls):
 
-        port = ip_port.rsplit(
-            ":",
-            1
-        )[1]
-
-        if port not in stream_ports:
-            continue
-
-        url = "http://" + ip_port
-
-        if url not in results:
-            results.append(url)
-
-    # =====================================================
-    # 最终去重
-    # =====================================================
-
-    unique = []
+    result = []
 
     seen = set()
 
-    for url in results:
+    for url in urls:
 
         url = clean_url(url)
 
         if not url:
             continue
 
-        if url in seen:
+        key = url.lower()
+
+        if key in seen:
             continue
 
-        seen.add(url)
+        seen.add(key)
 
-        unique.append(url)
+        result.append(url)
 
-    return unique
+    return result
 
 
 # =========================================================
-# 单个关键词搜索
+# FoodieGuide 单个关键词搜索
 # =========================================================
 
-def search_keyword(session, keyword):
+def foodie_search_keyword(
+    session,
+    keyword
+):
 
-    streams = []
+    results = []
 
     print()
-    print("-" * 60)
-    print("搜索关键词：", keyword)
-    print("-" * 60)
+    print(
+        "FoodieGuide 搜索：",
+        keyword
+    )
 
     # =====================================================
-    # 第一入口
+    # 方式 1
+    # ?chname=
     # =====================================================
-
-    params = {
-        "chname": keyword
-    }
 
     try:
 
         response = session.get(
-            BASE_URL,
-            params=params,
+            FOODIE_URL,
+            params={
+                "chname": keyword
+            },
+            headers=HEADERS,
+            timeout=TIMEOUT,
+            verify=False
+        )
+
+        print(
+            "  chname HTTP：",
+            response.status_code,
+            "长度：",
+            len(response.text)
+        )
+
+        if response.status_code == 200:
+
+            results.extend(
+                extract_urls(
+                    response.text
+                )
+            )
+
+    except Exception as e:
+
+        print(
+            "  chname 失败：",
+            e
+        )
+
+    # =====================================================
+    # 方式 2
+    # ?iptv=
+    # =====================================================
+
+    try:
+
+        response = session.get(
+            FOODIE_URL,
+            params={
+                "iptv": keyword
+            },
+            headers=HEADERS,
+            timeout=TIMEOUT,
+            verify=False
+        )
+
+        print(
+            "  iptv HTTP：",
+            response.status_code,
+            "长度：",
+            len(response.text)
+        )
+
+        if response.status_code == 200:
+
+            results.extend(
+                extract_urls(
+                    response.text
+                )
+            )
+
+    except Exception as e:
+
+        print(
+            "  iptv 失败：",
+            e
+        )
+
+    # =====================================================
+    # 方式 3
+    # page + chname
+    # =====================================================
+
+    try:
+
+        response = session.get(
+            FOODIE_URL,
+            params={
+                "page": "1",
+                "chname": keyword,
+                "l": "0"
+            },
+            headers=HEADERS,
+            timeout=TIMEOUT,
+            verify=False
+        )
+
+        print(
+            "  page HTTP：",
+            response.status_code,
+            "长度：",
+            len(response.text)
+        )
+
+        if response.status_code == 200:
+
+            results.extend(
+                extract_urls(
+                    response.text
+                )
+            )
+
+    except Exception as e:
+
+        print(
+            "  page 失败：",
+            e
+        )
+
+    # =====================================================
+    # 方式 4
+    # POST seerch
+    # =====================================================
+
+    try:
+
+        response = session.post(
+            FOODIE_URL,
+            data={
+                "seerch": keyword
+            },
+            headers=HEADERS,
+            timeout=TIMEOUT,
+            verify=False
+        )
+
+        print(
+            "  POST HTTP：",
+            response.status_code,
+            "长度：",
+            len(response.text)
+        )
+
+        if response.status_code == 200:
+
+            results.extend(
+                extract_urls(
+                    response.text
+                )
+            )
+
+    except Exception as e:
+
+        print(
+            "  POST 失败：",
+            e
+        )
+
+    return unique_urls(
+        results
+    )
+
+
+# =========================================================
+# Tonkiang 单个入口
+# =========================================================
+
+def tonkiang_search_endpoint(
+    session,
+    endpoint,
+    keyword
+):
+
+    results = []
+
+    url = (
+        TONKIANG_BASE
+        + endpoint
+    )
+
+    print(
+        "  Tonkiang：",
+        endpoint
+    )
+
+    # -----------------------------------------------------
+    # GET ?iptv=关键词
+    # -----------------------------------------------------
+
+    try:
+
+        response = session.get(
+            url,
+            params={
+                "iptv": keyword
+            },
             headers=HEADERS,
             timeout=TIMEOUT,
             verify=False,
@@ -336,50 +486,38 @@ def search_keyword(session, keyword):
         )
 
         print(
-            "入口1 HTTP：",
-            response.status_code
-        )
-
-        print(
-            "网页长度：",
+            "    GET：",
+            response.status_code,
+            "长度：",
             len(response.text)
         )
 
         if response.status_code == 200:
 
-            found = extract_urls(
-                response.text
+            results.extend(
+                extract_urls(
+                    response.text
+                )
             )
-
-            print(
-                "入口1找到：",
-                len(found)
-            )
-
-            streams.extend(found)
 
     except Exception as e:
 
         print(
-            "入口1失败：",
+            "    GET失败：",
             e
         )
 
-    # =====================================================
-    # 第二入口
-    # =====================================================
-
-    params = {
-        "page": "1",
-        "chname": keyword,
-        "l": "0"
-    }
+    # -----------------------------------------------------
+    # GET ?chname=关键词
+    # -----------------------------------------------------
 
     try:
 
         response = session.get(
-            BASE_URL,
-            params=params,
+            url,
+            params={
+                "chname": keyword
+            },
             headers=HEADERS,
             timeout=TIMEOUT,
             verify=False,
@@ -387,43 +525,380 @@ def search_keyword(session, keyword):
         )
 
         print(
-            "入口2 HTTP：",
-            response.status_code
-        )
-
-        print(
-            "网页长度：",
+            "    CHNAME：",
+            response.status_code,
+            "长度：",
             len(response.text)
         )
 
         if response.status_code == 200:
 
-            found = extract_urls(
-                response.text
+            results.extend(
+                extract_urls(
+                    response.text
+                )
             )
-
-            print(
-                "入口2找到：",
-                len(found)
-            )
-
-            streams.extend(found)
 
     except Exception as e:
 
         print(
-            "入口2失败：",
+            "    CHNAME失败：",
             e
         )
 
-    return streams
+    # -----------------------------------------------------
+    # POST seerch
+    # -----------------------------------------------------
+
+    try:
+
+        response = session.post(
+            url,
+            data={
+                "seerch": keyword
+            },
+            headers=HEADERS,
+            timeout=TIMEOUT,
+            verify=False,
+            allow_redirects=True
+        )
+
+        print(
+            "    POST：",
+            response.status_code,
+            "长度：",
+            len(response.text)
+        )
+
+        if response.status_code == 200:
+
+            results.extend(
+                extract_urls(
+                    response.text
+                )
+            )
+
+    except Exception as e:
+
+        print(
+            "    POST失败：",
+            e
+        )
+
+    return unique_urls(
+        results
+    )
 
 
 # =========================================================
-# 多关键词搜索
+# Tonkiang 所有类型
 # =========================================================
 
-def search_foodieguide():
+def tonkiang_search(
+    session,
+    keyword
+):
+
+    results = []
+
+    print()
+    print(
+        "Tonkiang 搜索：",
+        keyword
+    )
+
+    endpoints = [
+        "index.php",
+        "iptvhotelx.php",
+        "iptvmulticast.php",
+        "mqlive.php",
+        "iptvproxy.php",
+    ]
+
+    for endpoint in endpoints:
+
+        found = tonkiang_search_endpoint(
+            session,
+            endpoint,
+            keyword
+        )
+
+        if found:
+
+            print(
+                "    找到：",
+                len(found),
+                "条"
+            )
+
+            results.extend(found)
+
+        time.sleep(0.3)
+
+    return unique_urls(
+        results
+    )
+
+
+# =========================================================
+# 搜索一个频道
+# =========================================================
+
+def search_channel(
+    session,
+    channel
+):
+
+    print()
+    print("=" * 60)
+    print(
+        "正在搜索频道：",
+        channel
+    )
+    print("=" * 60)
+
+    aliases = CHANNEL_ALIASES.get(
+        channel,
+        [channel]
+    )
+
+    print(
+        "搜索关键词：",
+        " / ".join(aliases)
+    )
+
+    all_urls = []
+
+    for keyword in aliases:
+
+        # -------------------------------------------------
+        # FoodieGuide
+        # -------------------------------------------------
+
+        foodie_urls = foodie_search_keyword(
+            session,
+            keyword
+        )
+
+        all_urls.extend(
+            foodie_urls
+        )
+
+        # -------------------------------------------------
+        # Tonkiang
+        # -------------------------------------------------
+
+        tonkiang_urls = tonkiang_search(
+            session,
+            keyword
+        )
+
+        all_urls.extend(
+            tonkiang_urls
+        )
+
+        time.sleep(0.5)
+
+    # -----------------------------------------------------
+    # 当前频道去重
+    # -----------------------------------------------------
+
+    all_urls = unique_urls(
+        all_urls
+    )
+
+    print()
+    print(
+        channel,
+        "最终候选源：",
+        len(all_urls)
+    )
+
+    for index, url in enumerate(
+        all_urls,
+        1
+    ):
+
+        print(
+            f"{index}. {url}"
+        )
+
+    return all_urls
+
+
+# =========================================================
+# 全局 URL 去重
+# =========================================================
+
+def deduplicate(
+    channel_results
+):
+
+    seen = set()
+
+    result = []
+
+    for channel, urls in channel_results:
+
+        new_urls = []
+
+        for url in urls:
+
+            key = url.lower()
+
+            if key in seen:
+                continue
+
+            seen.add(key)
+
+            new_urls.append(url)
+
+        result.append(
+            (
+                channel,
+                new_urls
+            )
+        )
+
+    return result
+
+
+# =========================================================
+# 生成 M3U8
+# =========================================================
+
+def save_m3u8(
+    channel_results
+):
+
+    with open(
+        M3U_FILE,
+        "w",
+        encoding="utf-8",
+        newline="\n"
+    ) as file:
+
+        file.write(
+            "#EXTM3U\n"
+        )
+
+        for channel, urls in channel_results:
+
+            for url in urls:
+
+                file.write(
+                    '#EXTINF:-1 '
+                    f'tvg-name="{channel}" '
+                    'group-title="直播",'
+                    f'{channel}\n'
+                )
+
+                file.write(
+                    url
+                    + "\n"
+                )
+
+    print()
+    print(
+        "M3U8 文件已生成：",
+        M3U_FILE
+    )
+
+
+# =========================================================
+# 生成 TXT
+#
+# 格式：
+#
+# 直播,#genre#
+# 凤凰中文,http://xxx
+# 凤凰资讯,http://xxx
+# 翡翠台,http://xxx
+#
+# =========================================================
+
+def save_txt(
+    channel_results
+):
+
+    with open(
+        TXT_FILE,
+        "w",
+        encoding="utf-8",
+        newline="\n"
+    ) as file:
+
+        file.write(
+            "直播,#genre#\n"
+        )
+
+        for channel, urls in channel_results:
+
+            for url in urls:
+
+                file.write(
+                    f"{channel},{url}\n"
+                )
+
+    print(
+        "TXT 文件已生成：",
+        TXT_FILE
+    )
+
+
+# =========================================================
+# 主程序
+# =========================================================
+
+def main():
+
+    print()
+    print("=" * 60)
+    print("IPTV 直播源搜索引擎")
+    print("=" * 60)
+
+    print(
+        "频道数量：",
+        len(CHANNELS)
+    )
+
+    print(
+        "搜索入口："
+    )
+
+    print(
+        "1. FoodieGuide"
+    )
+
+    print(
+        "2. Tonkiang 普通"
+    )
+
+    print(
+        "3. Tonkiang 酒店源"
+    )
+
+    print(
+        "4. Tonkiang 组播源"
+    )
+
+    print(
+        "5. Tonkiang 秒开源"
+    )
+
+    print(
+        "6. Tonkiang 代理源"
+    )
+
+    print(
+        "不进行播放检测"
+    )
+
+    print(
+        "不限制最终源数量"
+    )
+
+    print("=" * 60)
 
     session = requests.Session()
 
@@ -431,206 +906,157 @@ def search_foodieguide():
         HEADERS
     )
 
-    print()
-    print("=" * 60)
-    print("FoodieGuide 多关键词 IPTV 搜索")
-    print("=" * 60)
-
-    print(
-        "主频道：",
-        KEYWORD
-    )
-
-    print(
-        "搜索关键词数量：",
-        len(SEARCH_KEYWORDS)
-    )
-
-    all_streams = []
+    channel_results = []
 
     # =====================================================
-    # 逐个关键词搜索
+    # 搜索所有频道
     # =====================================================
 
-    for keyword in SEARCH_KEYWORDS:
+    for channel in CHANNELS:
 
-        found = search_keyword(
-            session,
-            keyword
-        )
+        try:
 
-        all_streams.extend(
-            found
-        )
-
-    # =====================================================
-    # 全部去重
-    # =====================================================
-
-    unique = []
-
-    seen = set()
-
-    for stream in all_streams:
-
-        stream = clean_url(stream)
-
-        if not stream:
-            continue
-
-        if stream in seen:
-            continue
-
-        seen.add(stream)
-
-        unique.append(stream)
-
-    # =====================================================
-    # 输出结果
-    # =====================================================
-
-    print()
-    print("=" * 60)
-    print("全部搜索完成")
-    print("=" * 60)
-
-    print(
-        "搜索关键词：",
-        len(SEARCH_KEYWORDS)
-    )
-
-    print(
-        "原始结果数量：",
-        len(all_streams)
-    )
-
-    print(
-        "去重后直播源：",
-        len(unique)
-    )
-
-    print("=" * 60)
-
-    for index, stream in enumerate(
-        unique,
-        1
-    ):
-
-        print(
-            f"{index}. {stream}"
-        )
-
-    return unique
-
-
-# =========================================================
-# 保存 M3U
-# =========================================================
-
-def save_m3u(streams):
-
-    filename = "live_results.m3u"
-
-    try:
-
-        with open(
-            filename,
-            "w",
-            encoding="utf-8"
-        ) as file:
-
-            file.write(
-                "#EXTM3U\n"
+            urls = search_channel(
+                session,
+                channel
             )
 
-            for index, stream in enumerate(
-                streams,
-                1
-            ):
-
-                file.write(
-                    f"#EXTINF:-1,{KEYWORD} {index}\n"
+            channel_results.append(
+                (
+                    channel,
+                    urls
                 )
+            )
 
-                file.write(
-                    stream + "\n"
+        except Exception as e:
+
+            print()
+            print(
+                "频道搜索异常：",
+                channel
+            )
+
+            print(
+                e
+            )
+
+            channel_results.append(
+                (
+                    channel,
+                    []
                 )
+            )
 
-        print()
-        print(
-            "M3U 文件已生成：",
-            filename
-        )
+        time.sleep(1)
 
-    except Exception as e:
+    # =====================================================
+    # 全局去重
+    # =====================================================
 
-        print(
-            "M3U 保存失败：",
-            e
-        )
+    print()
+    print("=" * 60)
+    print("全局 URL 去重")
+    print("=" * 60)
 
+    channel_results = deduplicate(
+        channel_results
+    )
 
-# =========================================================
-# 保存 TXT
-# =========================================================
+    # =====================================================
+    # 统计
+    # =====================================================
 
-def save_txt(streams):
+    print()
+    print("=" * 60)
+    print("最终搜索结果")
+    print("=" * 60)
 
-    filename = "live_results.txt"
+    total = 0
 
-    try:
+    for channel, urls in channel_results:
 
-        with open(
-            filename,
-            "w",
-            encoding="utf-8"
-        ) as file:
-
-            for stream in streams:
-
-                file.write(
-                    stream + "\n"
-                )
+        count = len(urls)
 
         print(
-            "TXT 文件已生成：",
-            filename
+            f"{channel}: {count} 条"
         )
 
-    except Exception as e:
+        total += count
+
+    print()
+    print(
+        "全部直播源：",
+        total
+    )
+
+    print("=" * 60)
+
+    # =====================================================
+    # 生成文件
+    # =====================================================
+
+    save_m3u8(
+        channel_results
+    )
+
+    save_txt(
+        channel_results
+    )
+
+    # =====================================================
+    # 检查文件
+    # =====================================================
+
+    print()
+    print("=" * 60)
+    print("文件检查")
+    print("=" * 60)
+
+    print(
+        "M3U8：",
+        M3U_FILE
+    )
+
+    print(
+        "TXT：",
+        TXT_FILE
+    )
+
+    print(
+        "M3U8 存在：",
+        os.path.exists(M3U_FILE)
+    )
+
+    print(
+        "TXT 存在：",
+        os.path.exists(TXT_FILE)
+    )
+
+    if os.path.exists(M3U_FILE):
 
         print(
-            "TXT 保存失败：",
-            e
+            "M3U8 大小：",
+            os.path.getsize(M3U_FILE),
+            "bytes"
         )
 
+    if os.path.exists(TXT_FILE):
 
-# =========================================================
-# 主程序
-# =========================================================
-
-if __name__ == "__main__":
-
-    streams = search_foodieguide()
-
-    if streams:
-
-        save_m3u(
-            streams
-        )
-
-        save_txt(
-            streams
-        )
-
-    else:
-
-        print()
         print(
-            "没有找到直播源。"
+            "TXT 大小：",
+            os.path.getsize(TXT_FILE),
+            "bytes"
         )
 
     print()
     print("=" * 60)
     print("搜索完成")
     print("=" * 60)
+
+
+# =========================================================
+# 启动
+# =========================================================
+
+if __name__ == "__main__":
+    main()
